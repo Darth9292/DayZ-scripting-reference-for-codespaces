@@ -1172,6 +1172,53 @@ GetGame().GetWorld().SetTimeMultiplier(32);  // 32x speed
 
 ---
 
+## General Modding Dos and Donts
+
+### UI and Widget Safety
+- **Do** create UI widgets via `CALL_CATEGORY_GUI` after the mission and UI manager exist. Early widget creation can crash.
+- **Do** use a fullscreen root widget for overlays (`FrameWidgetTypeID` with `VISIBLE | HEXACTPOS | VEXACTPOS`).
+- **Don't** rely on exact-size flags for root containers unless you intend a 1x1 pixel parent.
+
+### Textures and Alpha Channels
+- **Do** use DDS formats that preserve alpha (DXT5 or ARGB) and verify the alpha channel in your tool.
+- **Do** prefer `_ca` textures for UI sprites when alpha is required.
+- **Don't** bake checkerboards into the color layer; transparent pixels must live in alpha.
+
+### PPE (Post-Process) Behavior
+- **Do** reset exposure or any PP overrides on stop (`SetTargetValueFloatDefault`).
+- **Do** use exposure or saturation as a fallback if `PPEColors` appears to have no visible effect.
+- **Don't** stack conflicting PP requests at the same priority if you need predictable output.
+
+### CallLater and Input Safety
+- **Do** call `CallLater(functionRef, delay, repeat)` with a function reference (not string names).
+- **Do** guard missing inputs and log only once to avoid spam.
+
+### Performance and Raycasts
+- **Do** reuse arrays for `GetObjectsAtPosition3D` and avoid per-frame allocations.
+- **Do** cull early: run raycasts only for points that are on-screen and inside FOV.
+- **Don't** raycast per point at full rate for large crowds; reduce points by distance or type.
+
+### Bones, Selections, and Compatibility
+- **Do** use selection positions (`GetSelectionPositionWS`) as a safer alternative to bones on some creatures.
+- **Do** include case variants for selection names (e.g., `Head` and `head`).
+- **Don't** assume all entities share the same bone set or selection names.
+
+### Energy and Power Checks
+- **Do** check attached batteries directly (`FindAttachmentBySlotName`) and their energy managers.
+- **Do** fall back to headgear energy or energy source when attachments are absent.
+
+### Debugging and Maintainability
+- **Do** gate debug logs with a config flag in `CfgMods`.
+- **Do** log a version string on init to correlate issues with builds.
+- **Don't** leave noisy logs enabled by default.
+
+### Visual Fidelity Tips
+- **Do** scale overlay effects with FOV for scopes vs. hip-fire.
+- **Do** remove off-screen indicators immediately to avoid directional hints.
+- **Don't** let stacked sprites fully occlude targets; control alpha to preserve detail.
+
+---
+
 ## Summary for AI Agents
 
 You are working in a **DayZ modding environment using EnforceScript**. Your primary tasks are:
