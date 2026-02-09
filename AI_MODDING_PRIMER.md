@@ -710,6 +710,25 @@ if (item)
 }
 ```
 
+### ❌ Pitfall 5: Ternary operators in script modules
+Some EnforceScript parsers choke on ternary operators in certain modules (notably 4_World and 5_Mission), producing misleading "Broken expression" or "missing ';'" errors.
+
+```c
+// WRONG (can fail to parse in some modules)
+string state = player.GetCommand_Vehicle() ? "vehicle" : "none";
+
+// CORRECT
+string state;
+if (player.GetCommand_Vehicle())
+{
+    state = "vehicle";
+}
+else
+{
+    state = "none";
+}
+```
+
 ---
 
 ## Reference Directory Structure
