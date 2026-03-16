@@ -357,6 +357,63 @@ modded class DayZPlayer
 }
 ```
 
+### Pattern 5: Recipe Scripting
+
+Crafting recipes inherit from `RecipeBase` and live in `4_World/Recipe/`.
+
+```c
+// mod/Scripts/4_World/Recipe/MyCraftingRecipe.c
+class MyCraftingRecipe extends RecipeBase
+{
+    override void Init()
+    {
+        m_Name = "My Recipe Name";   // Display name shown in the crafting menu
+        m_IsInstaRecipe = false;     // true = instant craft (no animation); false = plays crafting animation
+        m_AnimationLength = 1.5;     // Crafting time in seconds
+
+        m_Ingredients.Clear();
+
+        InsertIngredient(0, "Rag");
+        m_IngredientAddAllowed[0] = true;   // Ingredient is consumed
+
+        InsertIngredient(1, "SewingKit");
+        m_IngredientAddAllowed[1] = false;  // Ingredient is NOT consumed
+
+        AddResult("MyCraftedItem");
+    }
+
+    override bool CanDo(ItemBase ingredients[], PlayerBase player)
+    {
+        // Optional: extra conditions before crafting is allowed
+        return true;
+    }
+
+    override void Do(ItemBase ingredients[], PlayerBase player, array<ItemBase> results, float specialty)
+    {
+        super.Do(ingredients, player, results, specialty);
+        // Optional: post-craft side effects (e.g., logging, sound triggers)
+    }
+}
+```
+
+Register it in `config.cpp`:
+```cpp
+class CfgRecipes
+{
+    class MyCraftingRecipe
+    {
+        ingredients[] = {"Rag", "SewingKit"};
+        results[] = {"MyCraftedItem"};
+    };
+};
+```
+
+**Key recipe notes**:
+- `InsertIngredient(slot, className)` adds an ingredient by class name
+- `m_IngredientAddAllowed[slot] = false` means the item is **not** consumed
+- `AddResult(className)` specifies the output item
+- All recipe logic runs on the server; do not put client-only code inside `Do()`
+
 ---
 
 ## Critical Concepts
@@ -462,6 +519,56 @@ class MyItem extends ItemBase
 }
 ```
 
+#### RegisterNetSyncVariable Patterns
+
+For lightweight variables that only need to flow **server → all clients**, use `RegisterNetSyncVariable*` instead of a full RPC or manual serialisation. This is the preferred pattern for simple state flags, enum-style integers, and small values that every client needs to reflect.
+
+**Registration (in constructor or `Init()`)**:
+```c
+class MyItem extends ItemBase
+{
+    protected int m_MyState;
+    protected bool m_MyFlag;
+
+    void MyItem()
+    {
+        // Register with optional min/max to minimise bandwidth
+        RegisterNetSyncVariableInt("m_MyState", 0, 10);
+        RegisterNetSyncVariableBool("m_MyFlag");
+    }
+}
+```
+
+**Server-side mutation (the ONLY place that should write these)**:
+```c
+void SetMyState(int state)
+{
+    if (!GetGame().IsServer())
+        return;  // Guard: only the server mutates synced state
+
+    m_MyState = state;
+    SetSynchDirty();  // Triggers replication to all clients
+}
+```
+
+**Client-side update hook**:
+```c
+override void OnVariablesSynchronized()
+{
+    super.OnVariablesSynchronized();
+    // Called on clients whenever synced variables arrive
+    // Apply visual/audio effects here — do NOT change authoritative state
+    UpdateVisuals();
+}
+```
+
+**Rules of thumb**:
+- Register variables before the first sync (constructor / `Init()`)
+- **Only the server** mutates synced variables; client mutations are silently discarded
+- Always call `SetSynchDirty()` after mutation or the change will not replicate
+- Clients react to incoming state in `OnVariablesSynchronized()` — visual/audio only
+- Specify integer min/max to reduce network bandwidth
+
 ### Quantity System
 
 Items can have quantities (ammo, liquid, stackable items):
@@ -481,6 +588,51 @@ override void SetQuantity(float value, bool destroy_config = true, bool destroy_
 float qty = GetQuantity();
 float maxQty = GetQuantityMax();
 ```
+
+### Mission Layer: MissionServer, MissionGameplay, and Module Context
+
+DayZ mission code is split between two contexts. Putting code in the wrong one is a common source of silent failures.
+
+#### How the Engine Chooses a Mission Class
+
+```c
+// Simplified from vanilla CreateMission()
+Mission CreateMission(string path)
+{
+    if (g_Game.IsMultiplayer() && g_Game.IsServer())
+        return new MissionServer;
+
+    if (g_Game.IsMultiplayer())
+        return new MissionGameplay;  // Client in multiplayer
+
+    return new MissionLocal;         // Singleplayer
+}
+```
+
+#### MissionServer
+- Runs **only on the dedicated/listen server**
+- Handles: CE (central economy) callbacks, server-side events, `OnPlayerConnected()`, `OnPlayerDisconnected()`, loot respawn triggers
+- Override `OnStartServer()`, `OnUpdate()`, etc.
+- **File**: `mod/Scripts/5_Mission/mission/missionserver.c`
+
+#### MissionGameplay
+- Runs **only on the client** (the player's own game instance)
+- Handles: HUD/overlays, custom UI, player-specific mission state, input processing
+- Override `OnUpdate()`, `OnKeyPress()`, `OnKeyRelease()`, etc.
+- **File**: `mod/Scripts/5_Mission/mission/missiongameplay.c`
+
+#### Where Does Code Belong?
+
+| What You're Doing | Module | Notes |
+|---|---|---|
+| Spawning entities, CE logic, authoritative state | `4_World` | Gate with `GetGame().IsServer()` |
+| HUD, overlays, widget trees | `5_Mission` (MissionGameplay) | Workspace only valid in mission layer |
+| Custom input handling (`GetUApi()`) | `5_Mission` (MissionGameplay) | Input API only valid during a mission |
+| Plugin/tick systems (`PluginBase`) | `4_World` | PluginBase lives in 4_World/plugins |
+| Server-side mission events | `5_Mission` (MissionServer) | e.g., `OnPlayerConnected()` |
+| Recipe definitions | `4_World/Recipe/` | RecipeBase subclasses go here |
+
+**Rule**: If it's about the game world (entities, physics, state) use `4_World`. If it's about what the local player sees or does during a mission session, use `5_Mission`.
 
 ---
 
@@ -1031,6 +1183,327 @@ GetGame().SurfaceIsSea(pos[0], pos[2]);      // Ocean
 GetGame().SurfaceIsPond(pos[0], pos[2]);     // Pond/lake
 ```
 
+### PluginBase and [MissionScript] Lifecycle
+
+`PluginBase` is the correct way to create systems that need to be **ticked every frame** or **initialised at mission start**. Do not invent custom registration attributes — they are silently ignored by the engine.
+
+#### The [MissionScript] + PluginBase Pattern
+
+```c
+// mod/Scripts/4_World/plugins/MyPlugin.c
+[MissionScript]  // Tells the engine to instantiate and register this class automatically
+class MyPlugin extends PluginBase
+{
+    private float m_Timer;
+
+    override void OnInit()
+    {
+        super.OnInit();
+        m_Timer = 0;
+        Print("[MyPlugin] Initialized");
+    }
+
+    override void OnUpdate(float timeslice)
+    {
+        super.OnUpdate(timeslice);
+        m_Timer += timeslice;
+
+        if (m_Timer >= 5.0)
+        {
+            m_Timer = 0;
+            DoPeriodicWork();
+        }
+    }
+
+    protected void DoPeriodicWork()
+    {
+        // Called every ~5 seconds
+    }
+}
+```
+
+#### Accessing Your Plugin
+
+```c
+// Get your plugin instance from anywhere in the codebase
+MyPlugin plugin = MyPlugin.Cast(GetPlugin(MyPlugin));
+if (plugin)
+    plugin.DoSomething();
+```
+
+#### How the Engine Manages It
+
+Classes with `[MissionScript]` that extend `PluginBase` are:
+1. **Automatically instantiated** by the engine at mission start
+2. **Registered with PluginManager**
+3. **Ticked every frame** via `PluginManager.MainOnUpdate()`
+4. **Accessible** via `GetPlugin(ClassName)`
+
+#### Manual Update Registration (Alternative)
+
+For classes that need periodic ticks but do not need the full PluginBase lifecycle:
+
+```c
+class MySystem
+{
+    void MySystem()
+    {
+        // Register for updates in constructor
+        GetGame().GetUpdateQueue(CALL_CATEGORY_GAMEPLAY).Insert(this.OnUpdate);
+    }
+
+    void ~MySystem()
+    {
+        // Always unregister in destructor to avoid dangling callbacks
+        GetGame().GetUpdateQueue(CALL_CATEGORY_GAMEPLAY).Remove(this.OnUpdate);
+    }
+
+    void OnUpdate(float timeslice)
+    {
+        // Custom update logic
+    }
+}
+```
+
+#### ⚠️ Common Mistake: Inventing Non-Existent Attributes
+
+```c
+// WRONG — [RegisterManager] does NOT exist in vanilla DayZ; silently ignored
+[RegisterManager]
+class MyManager
+{
+    void OnUpdate()   // NEVER called — nothing registers this
+    {
+    }
+}
+
+// CORRECT
+[MissionScript]
+class MyManager extends PluginBase
+{
+    override void OnUpdate(float timeslice)   // Called every frame
+    {
+    }
+}
+```
+
+### UI Widget Creation Timing in 5_Mission
+
+Creating widgets too early, in the wrong module, or without null-checking the required systems is a common source of crashes and silent failures.
+
+#### Safe Deferred Widget Creation Pattern
+
+```c
+// mod/Scripts/5_Mission/mission/MyHUDWidget.c
+class MyHUDWidget
+{
+    protected Widget m_Root;
+    protected bool m_CreateQueued;
+
+    void Show()
+    {
+        CreateRoot();
+    }
+
+    protected bool CreateRoot()
+    {
+        if (m_Root)
+            return true;
+        if (!GetGame())
+            return false;
+        if (m_CreateQueued)
+            return false;
+
+        // Defer actual creation to the next GUI call queue tick
+        m_CreateQueued = true;
+        GetGame().GetCallQueue(CALL_CATEGORY_GUI).CallLater(CreateRootQueued, 0, false);
+        return false;
+    }
+
+    protected void CreateRootQueued()
+    {
+        m_CreateQueued = false;
+        if (m_Root || !GetGame())
+            return;
+
+        // All three must exist before widgets can be created
+        if (!GetGame().GetUIManager())
+            return;
+
+        MissionGameplay mission = MissionGameplay.Cast(GetGame().GetMission());
+        if (!mission)
+            return;
+
+        WorkspaceWidget workspace = GetGame().GetWorkspace();
+        if (!workspace)
+            return;
+
+        m_Root = workspace.CreateWidget(FrameWidgetTypeID, 0, 0, 1.0, 1.0,
+            WidgetFlags.VISIBLE | WidgetFlags.HEXACTPOS | WidgetFlags.VEXACTPOS,
+            ARGB(0, 0, 0, 0), 0);
+
+        if (!m_Root)
+        {
+            Print("[MyHUDWidget] ERROR: Failed to create root widget");
+            return;
+        }
+
+        // Build child widget tree here
+    }
+
+    void Destroy()
+    {
+        if (m_Root)
+        {
+            m_Root.Unlink();
+            m_Root = null;
+        }
+    }
+}
+```
+
+#### UI Creation Rules
+
+1. **UI belongs in `5_Mission`** — `MissionGameplay.Cast(GetGame().GetMission())` is only valid during an active mission session
+2. **Defer creation** via `GetCallQueue(CALL_CATEGORY_GUI).CallLater(...)` when init timing is uncertain
+3. **Null-check all four prerequisites** before creating any widget:
+   - `GetGame()` exists
+   - `GetGame().GetUIManager()` exists
+   - `MissionGameplay.Cast(GetGame().GetMission())` succeeds
+   - `GetGame().GetWorkspace()` exists
+4. **Clean up widgets** — always call `widget.Unlink()` before setting to `null`
+5. **Do not create widgets in `4_World` code** — the workspace may not be available there
+
+### Input Handling (GetUApi / GetInputByName)
+
+Custom inputs require declaration in the mod's input XML, then retrieval at runtime via `GetUApi()`.
+
+#### Runtime Input Pattern
+
+```c
+// mod/Scripts/5_Mission/mission/MyInputHandler.c
+class MyInputHandler
+{
+    protected bool m_LoggedMissingInputs;
+
+    void HandleInput()
+    {
+        UAInputAPI api = GetUApi();
+        if (!api)
+            return;
+
+        UAInput myAction = api.GetInputByName("UAMyCustomAction");
+        if (!myAction)
+        {
+            if (!m_LoggedMissingInputs)
+            {
+                Print("[MyInputHandler] Input 'UAMyCustomAction' not found. Check inputs XML.");
+                m_LoggedMissingInputs = true;
+            }
+            return;
+        }
+
+        if (myAction.LocalPress())
+        {
+            // Fires once when the key is first pressed
+            OnActionPressed();
+        }
+
+        if (myAction.LocalRelease())
+        {
+            // Fires once when the key is released
+        }
+
+        if (myAction.LocalHold())
+        {
+            // Fires every frame while the key is held
+        }
+    }
+}
+```
+
+#### Input Declaration (inputs XML)
+
+Custom inputs must be declared in your mod's input configuration:
+```xml
+<group name="MyMod" type="character">
+    <action name="UAMyCustomAction">
+        <shortcut>K</shortcut>   <!-- Default key binding -->
+    </action>
+</group>
+```
+
+#### Input Handling Caveats
+
+- `GetUApi()` is only valid in the mission/client context (`5_Mission` / `MissionGameplay`)
+- If the input XML is missing or the action name is misspelled, `GetInputByName(...)` returns `null` — always null-check
+- Log missing inputs **only once** using a boolean flag to avoid log spam
+- Input names are **case-sensitive** and must match the XML declaration exactly
+- `LocalPress()` fires once per press; `LocalHold()` fires every frame while held; `LocalRelease()` fires once on release
+
+### Action Registration Pattern
+
+Player interactions with world objects or items are implemented as `ActionBase`-derived classes and registered through `SetActions()`.
+
+#### Registering Actions on an Entity
+
+```c
+// Registering custom actions on the player
+// mod/Scripts/4_World/entities/ManBase/playerbase.c
+modded class PlayerBase extends ManBase
+{
+    override void SetActions()
+    {
+        super.SetActions();             // ALWAYS call super — skipping removes ALL vanilla actions
+        AddAction(ActionMyFirstAction);
+        AddAction(ActionMySecondAction);
+    }
+}
+```
+
+```c
+// Registering actions on a custom item
+// mod/Scripts/4_World/entities/MyItem.c
+class MyItem extends ItemBase
+{
+    override void SetActions()
+    {
+        super.SetActions();             // ALWAYS call super first
+        AddAction(ActionInteractWithMyItem);
+    }
+}
+```
+
+#### Action Execution Contexts
+
+```c
+class ActionMyCustomAction : ActionInteractBase
+{
+    override void OnExecuteServer(ActionData action_data)
+    {
+        // Runs on the SERVER — authoritative state changes go here
+        PlayerBase player = PlayerBase.Cast(action_data.m_Player);
+        if (player)
+        {
+            // e.g., modify item state, trigger RPC, update synced variable
+        }
+    }
+
+    override void OnExecuteClient(ActionData action_data)
+    {
+        // Runs on the CLIENT — sounds, visual feedback, UI updates
+        // Do NOT make authoritative state changes here
+    }
+}
+```
+
+#### Key Rules
+
+1. **Always call `super.SetActions()`** — omitting it strips all vanilla interactions from that entity
+2. **`AddAction(ClassName)`** takes the class type, not an instance
+3. Actions are defined in `4_World/classes/UserActionsComponent/Actions/` and are globally available
+4. Pair actions that change replicated state with `RegisterNetSyncVariable*` + `SetSynchDirty()`
+
 ---
 
 ## Quick Reference: Essential Classes
@@ -1091,6 +1564,13 @@ Before finalizing mod code, verify:
 - [ ] Client/server context is respected (`GetGame().IsServer()` checks)
 - [ ] Null checks before accessing objects (use `Cast()` safely)
 - [ ] Variable synchronization implemented if needed (`OnStoreSave`/`OnStoreLoad`)
+- [ ] Synced variables registered via `RegisterNetSyncVariable*` and mutated server-side only
+- [ ] `SetSynchDirty()` called after every mutation of synced variables
+- [ ] `OnVariablesSynchronized()` used for client-side visual/audio updates (not state changes)
+- [ ] `SetActions()` overrides always call `super.SetActions()`
+- [ ] Plugin systems use `[MissionScript]` + `extends PluginBase` (not invented attributes)
+- [ ] UI widget creation deferred via `CALL_CATEGORY_GUI` with null checks for workspace/UIManager/mission
+- [ ] Custom input names declared in mod input XML before `GetInputByName(...)` is called
 - [ ] Entity creation wrapped in `GetGame().IsServer()` check
 - [ ] RPC IDs are unique and not conflicting
 - [ ] Timers cleaned up properly (Remove() called when needed)
@@ -1191,6 +1671,47 @@ GetGame().GetWorld().SetTimeMultiplier(32);  // 32x speed
 
 ---
 
+## Evaluating Example Repositories
+
+When referencing external repositories as code examples, apply the following quality criteria before treating any pattern as authoritative.
+
+### Alpha/WIP Repository Caveats
+
+Some repositories in this GitHub organisation are **early work-in-progress** and should be treated as **inspiration and learning material only**, not as finished implementations:
+
+- **`Darth9292/DayZoptimization`** — Very early alpha; actively under development. Architecture decisions may be incomplete or change frequently. Use for conceptual reference; always verify the approach against vanilla patterns before applying it.
+- **`Darth9292/nightvision-helmet-scripts`** — Partially complete. The nightvision system is functional and can be used as a reference. The thermal system is a younger work-in-progress with experimental implementations — treat thermal-specific patterns with additional caution.
+
+**When using these repositories as examples:**
+- Prefer vanilla/reference patterns over WIP patterns when they conflict
+- Check whether a technique is validated in a finished release or still experimental
+- Do not copy patterns blindly — explain tradeoffs and note WIP status in any generated code comments
+
+### Questions to Ask When Evaluating Example Code
+
+Before using a pattern from any example repository:
+
+1. **Is this a vanilla pattern or a custom workaround?** — Prefer the vanilla approach when available
+2. **Does this repo have known WIP caveats?** — Check the README and any FIXES_APPLIED / PLAN documents
+3. **Is the pattern tested in a multiplayer environment?** — Single-player tests miss desync bugs
+4. **Does it follow the server-authoritative model?** — State changes must happen on the server
+5. **Are null-safety guards present?** — Missing null checks are common in early WIP code
+6. **Is the technique documented in official Bohemia resources?** — Official docs are the gold standard
+
+### Source Quality Reference
+
+| Pattern | Recommended Source |
+|---|---|
+| PluginBase / `[MissionScript]` registration | Vanilla reference (`reference/4_world/plugins/`) |
+| Net sync variables (`RegisterNetSyncVariable*`) | Vanilla ItemBase reference or `DGO_CarLock` (stable) |
+| UI widget creation with deferred init | `nightvision-helmet-scripts` NV system (functional) |
+| Thermal/PPE overlay patterns | `nightvision-helmet-scripts` thermal system (WIP — use with caution) |
+| CE / player-cache optimisation | `DayZoptimization` (alpha — conceptually useful, verify before use) |
+| Basic recipe scripting | Vanilla `RecipeBase` reference or nightvision patch recipe |
+| Input registration | Vanilla reference + nightvision input handler pattern |
+
+---
+
 ## General Modding Dos and Donts
 
 ### UI and Widget Safety
@@ -1257,6 +1778,12 @@ You are working in a **DayZ modding environment using EnforceScript**. Your prim
 - Always wrap entity spawning in `GetGame().IsServer()` checks
 - Always use `autoptr` for reference-counted objects
 - Always validate RPC data in `OnRPC()` method
+- Use `[MissionScript]` + `extends PluginBase` for systems that need per-frame updates — never invent registration attributes
+- Register synced variables with `RegisterNetSyncVariable*`; mutate them server-side only; call `SetSynchDirty()` after each mutation; react on clients in `OnVariablesSynchronized()`
+- UI widgets belong in `5_Mission`; defer creation with `CALL_CATEGORY_GUI` and null-check workspace/UIManager/mission before creating
+- Always call `super.SetActions()` before adding actions with `AddAction()`
+- Custom inputs must be declared in the mod's input XML before `GetInputByName()` can find them
+- Treat alpha/WIP example repos as inspiration only — prefer vanilla reference patterns when they conflict with experimental examples
 
 **Language features you'll use frequently**:
 - Arrays: `array<Type>`, `TStringArray`, `TIntArray`
