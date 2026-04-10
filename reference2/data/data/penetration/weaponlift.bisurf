@@ -1,0 +1,15 @@
+Density=100;
+deflection=0.0099999998;
+bulletPenetrability=150000;
+transparency=1;
+rough=0.1;
+dust=0;
+audibility=0;
+soundEnviron="Empty";
+isLiquid="false";
+friction=0.69999999;
+restitution=0.40000001;
+impact="Hit_Undefined";
+soundHit="";
+isSolid="true";
+isPassthrough="true";

@@ -1,0 +1,13 @@
+Density=1000;
+deflection=0.02;
+bulletPenetrability=1500;
+transparency=0;
+rough=0.1;
+dust=0;
+audibility=0.69999999;
+soundEnviron="Empty";
+isLiquid="false";
+friction=0.40000001;
+restitution=0.1;
+impact="Hit_Snow";
+soundHit="soft_ground";

@@ -1,0 +1,13 @@
+Density=2000;
+deflection=1;
+bulletPenetrability=200;
+transparency=0;
+rough=0.1;
+dust=0;
+audibility=0.80000001;
+soundEnviron="Empty";
+isLiquid="false";
+friction=0.050000001;
+restitution=0;
+impact="Hit_Ice";
+soundHit="ice";
