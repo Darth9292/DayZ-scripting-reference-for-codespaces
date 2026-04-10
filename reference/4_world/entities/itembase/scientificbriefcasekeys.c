@@ -1,1 +1,0 @@
-class ScientificBriefcaseKeys : Inventory_Base {}

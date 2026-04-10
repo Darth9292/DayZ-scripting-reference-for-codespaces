@@ -1,1 +1,0 @@
-class Truck_01_Chassis extends Truck_01_Base {};

@@ -1,1 +1,0 @@
-class Chainmail extends Top_Base {};

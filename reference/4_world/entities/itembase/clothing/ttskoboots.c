@@ -1,1 +1,0 @@
-class TTSKOBoots extends Shoes_Base {};

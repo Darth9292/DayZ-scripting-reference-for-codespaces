@@ -1,1 +1,0 @@
-class Chainmail_Leggings extends Pants_Base {};

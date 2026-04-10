@@ -1,1 +1,0 @@
-class Chestplate extends Vest_Base {};

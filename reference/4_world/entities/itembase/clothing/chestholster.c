@@ -1,1 +1,0 @@
-class ChestHolster extends Vest_Base {};

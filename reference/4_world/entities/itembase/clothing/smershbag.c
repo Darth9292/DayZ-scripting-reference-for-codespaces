@@ -1,1 +1,0 @@
-class SmershBag extends Backpack_Base {};

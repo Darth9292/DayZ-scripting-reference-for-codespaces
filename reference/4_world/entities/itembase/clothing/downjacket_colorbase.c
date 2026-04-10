@@ -1,1 +1,0 @@
-class DownJacket_ColorBase extends Top_Base {};
