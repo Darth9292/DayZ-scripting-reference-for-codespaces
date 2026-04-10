@@ -1,0 +1,48 @@
+MatWaterPool {
+ AlbedoMap "{25A9608CDDECF90F}dz/water_sakhal/Ice_Lake/data/sakhal_ice_lake_ca.edds" 
+ AlbedoMapTexMat {
+  1 1 0 0
+ }
+ Color 0.3569 0.3843 0.4157 0.1176
+ Ambient 0 0 0 0
+ ZWrite 0
+ Sort translucent
+ OceanScatteringColor 0.1569 0.1569 0.1569 0
+ DepthScattering 0.297
+ NormalMap "{2B0DFE6FDAD36AF5}dz/water_sakhal/Ice_Lake/data/sakhal_ice_lake_nohq.edds" 
+ NormalPower 0.399
+ NormalMapping 0.15
+ SunPower 274.646
+ SunInfluence 1.076
+ SunNormalMul 1.051
+ WaterExtinction 100
+ GeometryBlend 1
+ RefractOffset 0.665
+ RefractScale 0.563
+ WindInfl 0
+ CausticMap "{EA764AD7A6112284}Graphics/Textures/Water/caustic.edds" 
+ Caustic 0
+ WetFloor 0.11
+ EnvironmentMap "{78E295B1DF38A8CF}dz/water_sakhal/Ice_Lake/data/env_lake_co.edds" 
+ ReflectionColor 0.4157 0.4784 0.549 0.1843
+ Fresnel 0.09
+ FresnelRange 0.187
+ GreyModifier 1
+ "Enable effect" 1
+ "Pixel stride_1" 16
+ "Z thickness_1" 0
+ Iterations_2 100
+ "Pixel stride_2" 16
+ "Z thickness_2" 0
+ FoamTerrainBlend 1.508
+ FoamMapping 1.5
+ FoamMove 0.52
+ FoamPower 4
+ FoamColor 0 0 0 1
+ UserMapping 0.15
+ UserTerrainBlend 2.279
+ UserPower 1.108
+ StreamSpeedInfl -1
+ StreamNormalSpeedInfl 0
+ TimeMul 0
+}
